@@ -22,13 +22,22 @@ let isConnected = false;
 let waSocket;
 
 const TASKS_FILE = path.join(__dirname, 'tasks.json');
-let TaskModel;
 
-// MongoDB Auth Models
+// Define Models at top level so they are immediately available
+let TaskModel;
 const AuthModel = mongoose.model('Auth', new mongoose.Schema({
     _id: String,
     data: String
 }, { _id: false }));
+
+if (process.env.MONGODB_URI) {
+    TaskModel = mongoose.model('Task', new mongoose.Schema({
+        phone: String,
+        message: String,
+        datetime: String,
+        status: { type: String, default: 'pending' }
+    }));
+}
 
 async function useMongoDBAuthState() {
     let creds;
@@ -81,14 +90,6 @@ async function initializeApp() {
         console.log('☁️ [CLOUD MODE] Connecting to MongoDB...');
         await mongoose.connect(process.env.MONGODB_URI);
         console.log('✅ Connected to MongoDB!');
-
-        const taskSchema = new mongoose.Schema({
-            phone: String,
-            message: String,
-            datetime: String,
-            status: { type: String, default: 'pending' }
-        });
-        TaskModel = mongoose.model('Task', taskSchema);
 
         const authState = await useMongoDBAuthState();
         state = authState.state;
