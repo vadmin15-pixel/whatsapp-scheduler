@@ -1,14 +1,15 @@
 require('dotenv').config();
 const express = require('express');
-const { Client, LocalAuth, RemoteAuth } = require('whatsapp-web.js');
 const http = require('http');
 const { Server } = require('socket.io');
 const QRCode = require('qrcode');
 const cron = require('node-cron');
 const fs = require('fs');
 const path = require('path');
+const pino = require('pino');
 const mongoose = require('mongoose');
-const { MongoStore } = require('wwebjs-mongo');
+
+const { makeWASocket, fetchLatestBaileysVersion, DisconnectReason, initAuthCreds, BufferJSON, useMultiFileAuthState } = require('@whiskeysockets/baileys');
 
 const app = express();
 const server = http.createServer(app);
@@ -18,111 +19,137 @@ app.use(express.json());
 app.use(express.static('public'));
 
 let isConnected = false;
-let waClient;
+let waSocket;
 
-// --- DATABASE SETUP (Local OR Cloud) ---
-let TaskModel;
 const TASKS_FILE = path.join(__dirname, 'tasks.json');
+let TaskModel;
+
+// MongoDB Auth Models
+const AuthModel = mongoose.model('Auth', new mongoose.Schema({
+    _id: String,
+    data: String
+}, { _id: false }));
+
+async function useMongoDBAuthState() {
+    let creds;
+    const existingCreds = await AuthModel.findById('creds');
+    if (existingCreds) {
+        creds = JSON.parse(existingCreds.data, BufferJSON.reviver);
+    } else {
+        creds = initAuthCreds();
+    }
+
+    return {
+        state: {
+            creds,
+            keys: {
+                get: async (type, ids) => {
+                    const data = {};
+                    await Promise.all(ids.map(async id => {
+                        const val = await AuthModel.findById(`${type}-${id}`);
+                        if (val) {
+                            data[id] = JSON.parse(val.data, BufferJSON.reviver);
+                        }
+                    }));
+                    return data;
+                },
+                set: async (data) => {
+                    for (const category in data) {
+                        for (const id in data[category]) {
+                            const value = data[category][id];
+                            const name = `${category}-${id}`;
+                            if (value) {
+                                await AuthModel.findByIdAndUpdate(name, { _id: name, data: JSON.stringify(value, BufferJSON.replacer) }, { upsert: true });
+                            } else {
+                                await AuthModel.findByIdAndDelete(name);
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        saveCreds: async () => {
+            await AuthModel.findByIdAndUpdate('creds', { _id: 'creds', data: JSON.stringify(creds, BufferJSON.replacer) }, { upsert: true });
+        }
+    };
+}
 
 async function initializeApp() {
-    let authStrategy;
+    let state, saveCreds;
 
     if (process.env.MONGODB_URI) {
         console.log('☁️ [CLOUD MODE] Connecting to MongoDB...');
         await mongoose.connect(process.env.MONGODB_URI);
         console.log('✅ Connected to MongoDB!');
 
-        // Define Cloud Schema for Messages
         const taskSchema = new mongoose.Schema({
             phone: String,
             message: String,
-            datetime: String, // UTC ISO string to completely avoid timezone bugs
+            datetime: String,
             status: { type: String, default: 'pending' }
         });
         TaskModel = mongoose.model('Task', taskSchema);
 
-        const store = new MongoStore({ mongoose: mongoose });
-        authStrategy = new RemoteAuth({ 
-            store: store, 
-            backupSyncIntervalMs: 300000 
-        });
+        const authState = await useMongoDBAuthState();
+        state = authState.state;
+        saveCreds = authState.saveCreds;
     } else {
         console.log('💻 [LOCAL MODE] Using local files...');
-        if (!fs.existsSync(TASKS_FILE)) {
-            fs.writeFileSync(TASKS_FILE, JSON.stringify([]));
-        }
-        authStrategy = new LocalAuth({ clientId: "scheduler" });
+        if (!fs.existsSync(TASKS_FILE)) fs.writeFileSync(TASKS_FILE, JSON.stringify([]));
+        const authState = await useMultiFileAuthState('baileys_auth_info');
+        state = authState.state;
+        saveCreds = authState.saveCreds;
     }
 
-    // --- PUPPETEER RAM OPTIMIZATION ---
-    // Extremely strict limits to stay safely under 512MB RAM free cloud limits
-    const puppeteerArgs = [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-accelerated-2d-canvas',
-        '--no-first-run',
-        '--no-zygote',
-        '--disable-gpu',
-        '--disable-extensions',
-        '--mute-audio',
-        '--disable-software-rasterizer',
-        '--disable-background-networking',
-        '--disable-background-timer-throttling',
-        '--disable-backgrounding-occluded-windows',
-        '--disable-breakpad',
-        '--disable-component-extensions-with-background-pages',
-        '--disable-features=TranslateUI,BlinkGenPropertyTrees',
-        '--disable-ipc-flooding-protection',
-        '--disable-renderer-backgrounding',
-        '--enable-features=NetworkService,NetworkServiceInProcess'
-    ];
+    async function connectToWhatsApp() {
+        const { version } = await fetchLatestBaileysVersion();
+        
+        waSocket = makeWASocket({
+            version,
+            auth: state,
+            printQRInTerminal: false,
+            logger: pino({ level: 'silent' }),
+            browser: ['WhatsApp Scheduler', 'Chrome', '1.0.0']
+        });
 
-    // Linux (Cloud) can use single-process to save RAM, but Windows crashes with it.
-    if (process.platform === 'linux') {
-        puppeteerArgs.push('--single-process'); 
+        waSocket.ev.on('connection.update', async (update) => {
+            const { connection, lastDisconnect, qr } = update;
+
+            if (qr) {
+                console.log('QR Code generated! Sending to website...');
+                const qrDataURL = await QRCode.toDataURL(qr);
+                io.emit('qr', qrDataURL);
+            }
+
+            if (connection === 'close') {
+                const shouldReconnect = lastDisconnect.error?.output?.statusCode !== DisconnectReason.loggedOut;
+                console.log('Connection closed, reconnecting:', shouldReconnect);
+                isConnected = false;
+                io.emit('status', 'Disconnected');
+                
+                if (shouldReconnect) {
+                    connectToWhatsApp();
+                } else {
+                    console.log('Logged out. Session wiped. Restarting scanner...');
+                    if (process.env.MONGODB_URI) {
+                        await AuthModel.deleteMany({});
+                    } else {
+                        fs.rmSync('baileys_auth_info', { recursive: true, force: true });
+                    }
+                    connectToWhatsApp();
+                }
+            } else if (connection === 'open') {
+                console.log('📱 Connected to WhatsApp successfully!');
+                isConnected = true;
+                io.emit('status', 'Connected');
+                io.emit('qr', null);
+            }
+        });
+
+        waSocket.ev.on('creds.update', saveCreds);
     }
 
-    waClient = new Client({
-        authStrategy: authStrategy,
-        puppeteer: {
-            headless: true,
-            args: puppeteerArgs
-        }
-    });
-
-    waClient.on('qr', async (qr) => {
-        console.log('QR Code generated! Sending to website...');
-        const qrDataURL = await QRCode.toDataURL(qr);
-        io.emit('qr', qrDataURL);
-    });
-
-    waClient.on('remote_session_saved', () => {
-        console.log('✅ Cloud Session securely saved to MongoDB!');
-    });
-
-    waClient.on('ready', () => {
-        console.log('📱 Connected to WhatsApp successfully!');
-        isConnected = true;
-        io.emit('status', 'Connected');
-        io.emit('qr', null); 
-    });
-
-    waClient.on('auth_failure', msg => {
-        console.error('AUTHENTICATION FAILURE', msg);
-    });
-
-    waClient.on('disconnected', (reason) => {
-        console.log('WhatsApp disconnected:', reason);
-        isConnected = false;
-        io.emit('status', 'Disconnected');
-        waClient.initialize().catch(console.error);
-    });
-
-    console.log('Initializing WhatsApp background browser...');
-    waClient.initialize().catch(err => {
-        console.error('FAILED TO INITIALIZE WHATSAPP:', err);
-    });
+    connectToWhatsApp();
 }
 
 initializeApp().catch(console.error);
@@ -132,19 +159,13 @@ io.on('connection', (socket) => {
     socket.emit('status', isConnected ? 'Connected' : 'Connecting/Waiting for QR');
 });
 
-// --- API ENDPOINTS ---
+// Uptime Ping Endpoint
+app.get('/api/ping', (req, res) => res.send('pong'));
 
-// Uptime Ping Endpoint (For UptimeRobot to keep server awake)
-app.get('/api/ping', (req, res) => {
-    res.send('pong');
-});
-
+// API endpoint to schedule a message
 app.post('/api/schedule', async (req, res) => {
     const { phone, message, datetime } = req.body;
-    
-    if (!phone || !message || !datetime) {
-        return res.status(400).json({ error: 'Missing fields' });
-    }
+    if (!phone || !message || !datetime) return res.status(400).json({ error: 'Missing fields' });
 
     const cleanPhone = phone.replace(/[^0-9]/g, '');
 
@@ -154,62 +175,50 @@ app.post('/api/schedule', async (req, res) => {
         res.json({ success: true, task: newTask });
     } else {
         const tasks = JSON.parse(fs.readFileSync(TASKS_FILE));
-        const newTask = {
-            id: Date.now().toString(),
-            phone: cleanPhone,
-            message,
-            datetime, // UTC ISO string
-            status: 'pending'
-        };
+        const newTask = { id: Date.now().toString(), phone: cleanPhone, message, datetime, status: 'pending' };
         tasks.push(newTask);
         fs.writeFileSync(TASKS_FILE, JSON.stringify(tasks, null, 2));
         res.json({ success: true, task: newTask });
     }
 });
 
+// API endpoint to get tasks
 app.get('/api/tasks', async (req, res) => {
     if (process.env.MONGODB_URI) {
         const tasks = await TaskModel.find();
-        // map _id to id for frontend to read
-        const mapped = tasks.map(t => ({ id: t._id, phone: t.phone, message: t.message, datetime: t.datetime, status: t.status }));
-        res.json(mapped);
+        res.json(tasks.map(t => ({ id: t._id, phone: t.phone, message: t.message, datetime: t.datetime, status: t.status })));
     } else {
-        const tasks = JSON.parse(fs.readFileSync(TASKS_FILE));
-        res.json(tasks);
+        res.json(JSON.parse(fs.readFileSync(TASKS_FILE)));
     }
 });
 
+// API endpoint to delete a task
 app.delete('/api/tasks/:id', async (req, res) => {
     if (process.env.MONGODB_URI) {
         await TaskModel.findByIdAndDelete(req.params.id);
-        res.json({ success: true });
     } else {
         let tasks = JSON.parse(fs.readFileSync(TASKS_FILE));
         tasks = tasks.filter(t => t.id !== req.params.id);
         fs.writeFileSync(TASKS_FILE, JSON.stringify(tasks, null, 2));
-        res.json({ success: true });
     }
+    res.json({ success: true });
 });
 
-// --- CRON JOB WORKER ---
-// Checks the clock every minute
+// Cron job running every minute to check for messages to send
 cron.schedule('* * * * *', async () => {
-    if (!isConnected) return;
-
-    const now = new Date(); // This is correctly in UTC on the cloud
+    if (!isConnected || !waSocket) return;
+    const now = new Date();
     
     if (process.env.MONGODB_URI) {
         const tasks = await TaskModel.find({ status: 'pending' });
         for (const task of tasks) {
-            const taskDate = new Date(task.datetime);
-            if (now >= taskDate) {
+            if (now >= new Date(task.datetime)) {
                 try {
-                    const jid = `${task.phone}@c.us`;
-                    await waClient.sendMessage(jid, task.message);
-                    console.log(`[SUCCESS] Sent scheduled message to ${task.phone}`);
+                    await waSocket.sendMessage(`${task.phone}@s.whatsapp.net`, { text: task.message });
+                    console.log(`[SUCCESS] Sent message to ${task.phone}`);
                     task.status = 'sent';
-                } catch (error) {
-                    console.error(`[ERROR] Failed to send message to ${task.phone}:`, error);
+                } catch (err) {
+                    console.error(`[ERROR] Failed to send:`, err);
                     task.status = 'failed';
                 }
                 await task.save();
@@ -217,29 +226,21 @@ cron.schedule('* * * * *', async () => {
         }
     } else {
         const tasks = JSON.parse(fs.readFileSync(TASKS_FILE));
-        let tasksUpdated = false;
-
+        let updated = false;
         for (let i = 0; i < tasks.length; i++) {
-            const task = tasks[i];
-            if (task.status === 'pending') {
-                const taskDate = new Date(task.datetime);
-                if (now >= taskDate) {
-                    try {
-                        const jid = `${task.phone}@c.us`;
-                        await waClient.sendMessage(jid, task.message);
-                        console.log(`[SUCCESS] Sent scheduled message to ${task.phone}`);
-                        tasks[i].status = 'sent';
-                    } catch (error) {
-                        console.error(`[ERROR] Failed to send message to ${task.phone}:`, error);
-                        tasks[i].status = 'failed';
-                    }
-                    tasksUpdated = true;
+            if (tasks[i].status === 'pending' && now >= new Date(tasks[i].datetime)) {
+                try {
+                    await waSocket.sendMessage(`${tasks[i].phone}@s.whatsapp.net`, { text: tasks[i].message });
+                    console.log(`[SUCCESS] Sent message to ${tasks[i].phone}`);
+                    tasks[i].status = 'sent';
+                } catch (err) {
+                    console.error(`[ERROR] Failed to send:`, err);
+                    tasks[i].status = 'failed';
                 }
+                updated = true;
             }
         }
-        if (tasksUpdated) {
-            fs.writeFileSync(TASKS_FILE, JSON.stringify(tasks, null, 2));
-        }
+        if (updated) fs.writeFileSync(TASKS_FILE, JSON.stringify(tasks, null, 2));
     }
 });
 
