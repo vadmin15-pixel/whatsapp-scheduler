@@ -67,7 +67,7 @@
                 <!-- Instant Send Box -->
                 <div class="bg-white p-4 border-t">
                     <form id="live-send-form" class="flex space-x-2">
-                        <input type="text" id="live-phone" placeholder="Phone Number (e.g. 919876543210)" required class="w-1/3 rounded border-gray-300 border p-2 text-sm focus:border-green-500 focus:ring-green-500">
+                        <input type="text" id="live-phone" list="contacts-list" placeholder="Search name or number" required class="w-1/3 rounded border-gray-300 border p-2 text-sm focus:border-green-500 focus:ring-green-500">
                         <input type="text" id="live-message" placeholder="Type a message to send instantly..." required class="flex-1 rounded border-gray-300 border p-2 text-sm focus:border-green-500 focus:ring-green-500">
                         <button type="submit" class="bg-green-500 text-white font-bold py-2 px-6 rounded hover:bg-green-600">Send</button>
                     </form>
@@ -82,8 +82,8 @@
                     <h2 class="text-xl font-semibold mb-4 border-b pb-2">Schedule a Message</h2>
                     <form id="schedule-form" class="space-y-4">
                         <div>
-                            <label class="block text-sm font-medium text-gray-700">Phone Number</label>
-                            <input type="text" id="phone" placeholder="e.g. 919876543210" required class="mt-1 block w-full rounded-md border-gray-300 border p-2">
+                            <label class="block text-sm font-medium text-gray-700">Contact or Phone Number</label>
+                            <input type="text" id="phone" list="contacts-list" placeholder="Search name or type number" required class="mt-1 block w-full rounded-md border-gray-300 border p-2">
                         </div>
                         <div class="grid grid-cols-2 gap-4">
                             <div>
@@ -123,8 +123,8 @@
                         </div>
                         <div class="grid grid-cols-2 gap-4">
                             <div>
-                                <label class="block text-sm font-medium text-gray-700">Phone (Optional)</label>
-                                <input type="text" id="bday-phone" class="mt-1 block w-full rounded-md border-gray-300 border p-2">
+                                <label class="block text-sm font-medium text-gray-700">Contact or Phone (Optional)</label>
+                                <input type="text" id="bday-phone" list="contacts-list" placeholder="Search name or type number" class="mt-1 block w-full rounded-md border-gray-300 border p-2">
                             </div>
                             <div>
                                 <label class="block text-sm font-medium text-gray-700">Date of Birth</label>
@@ -240,6 +240,7 @@
             // Load Data
             fetchTasks();
             fetchBirthdays();
+            fetchContacts();
             switchTab('tab-chat'); // Open Live Chat by default
         }
 
@@ -272,6 +273,27 @@
             const res = await fetch(endpoint, options);
             if (res.status === 401) logout();
             return res;
+        }
+
+        // --- FETCH CONTACTS FOR AUTOCOMPLETE ---
+        async function fetchContacts() {
+            const res = await apiCall('/api/contacts');
+            if(!res.ok) return;
+            const contacts = await res.json();
+            
+            // Check if datalist exists, if not create it
+            let datalist = document.getElementById('contacts-list');
+            if (!datalist) {
+                datalist = document.createElement('datalist');
+                datalist.id = 'contacts-list';
+                document.body.appendChild(datalist);
+            }
+            datalist.innerHTML = '';
+            
+            const validContacts = contacts.filter(c => c.name && c.phone).sort((a, b) => a.name.localeCompare(b.name));
+            validContacts.forEach(c => {
+                datalist.innerHTML += `<option value="${c.name} - ${c.phone}">`;
+            });
         }
 
         // --- LIVE CHAT SEND ---

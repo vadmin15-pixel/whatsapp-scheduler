@@ -53,6 +53,7 @@ const BIRTHDAYS_FILE = path.join(__dirname, 'birthdays.json');
 // Define Models at top level so they are immediately available
 let TaskModel;
 let BirthdayModel;
+let ContactModel;
 
 const AuthModel = mongoose.model('Auth', new mongoose.Schema({
     _id: String,
@@ -72,6 +73,11 @@ if (process.env.MONGODB_URI) {
         phone: String,
         month: Number,
         day: Number
+    }));
+
+    ContactModel = mongoose.model('Contact', new mongoose.Schema({
+        phone: String,
+        name: String
     }));
 }
 
@@ -170,18 +176,58 @@ async function initializeApp() {
                 for (const msg of m.messages) {
                     if (!msg.key.fromMe) {
                         const senderNumber = msg.key.remoteJid.split('@')[0];
-                        // Extract text from standard message or extended text message
                         const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text;
                         
                         if (text) {
-                            console.log(`[LIVE CHAT] Received message from ${senderNumber}`);
-                            // Broadcast live message to frontend securely
+                            let displayName = senderNumber;
+                            // Try to look up the name in the database
+                            if (process.env.MONGODB_URI) {
+                                const contact = await ContactModel.findOne({ phone: senderNumber });
+                                if (contact && contact.name) {
+                                    displayName = `${contact.name} (${senderNumber})`;
+                                }
+                            }
+
+                            console.log(`[LIVE CHAT] Received message from ${displayName}`);
                             io.emit('live_message_received', {
-                                sender: senderNumber,
+                                sender: displayName,
                                 text: text,
                                 timestamp: new Date().toISOString()
                             });
                         }
+                    }
+                }
+            }
+        });
+
+        // CONTACT SYNC: Listen for contact updates from WhatsApp
+        waSocket.ev.on('contacts.upsert', async (contacts) => {
+            if (process.env.MONGODB_URI) {
+                for (const contact of contacts) {
+                    const name = contact.name || contact.notify || contact.verifiedName;
+                    if (name) {
+                        const phone = contact.id.split('@')[0];
+                        await ContactModel.updateOne(
+                            { phone },
+                            { phone, name },
+                            { upsert: true }
+                        );
+                    }
+                }
+            }
+        });
+
+        waSocket.ev.on('messaging-history.set', async ({ contacts }) => {
+            if (process.env.MONGODB_URI) {
+                for (const contact of contacts) {
+                    const name = contact.name || contact.notify || contact.verifiedName;
+                    if (name) {
+                        const phone = contact.id.split('@')[0];
+                        await ContactModel.updateOne(
+                            { phone },
+                            { phone, name },
+                            { upsert: true }
+                        );
                     }
                 }
             }
@@ -241,6 +287,16 @@ app.get('/api/ping', (req, res) => res.send('pong'));
 // Auth check endpoint for the frontend login screen
 app.post('/api/verify-password', checkAuth, (req, res) => {
     res.json({ success: true });
+});
+
+// --- CONTACTS ENDPOINT ---
+app.get('/api/contacts', checkAuth, async (req, res) => {
+    if (process.env.MONGODB_URI) {
+        const contacts = await ContactModel.find({});
+        res.json(contacts);
+    } else {
+        res.json([]);
+    }
 });
 
 // --- LIVE CHAT ENDPOINT ---
