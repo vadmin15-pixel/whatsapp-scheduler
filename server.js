@@ -16,7 +16,11 @@ const server = http.createServer(app);
 const io = new Server(server);
 
 app.use(express.json());
-app.use(express.static('public'));
+
+// Serve index.html directly from the main folder (no public folder needed)
+app.get('/', (req, res) => {
+    res.sendFile(path.join(__dirname, 'index.html'));
+});
 
 function checkAuth(req, res, next) {
     const correctPassword = process.env.MASTER_PASSWORD || 'admin';
@@ -151,43 +155,7 @@ async function initializeApp() {
             browser: ['WhatsApp Scheduler', 'Chrome', '1.0.0']
         });
 
-        // CONTACT SYNC LOGIC
-        async function processContacts(contactsArray) {
-            if (!process.env.MONGODB_URI || !contactsArray) return;
-            for (const contact of contactsArray) {
-                const name = contact.name || contact.notify || contact.verifiedName;
-                if (name) {
-                    const jid = contact.id;
-                    if (!jid) continue;
-
-                    let phone = jid;
-                    // Ignore LIDs for display, only show real numbers
-                    if (jid.includes('@s.whatsapp.net')) {
-                        phone = jid.split('@')[0];
-                        await ContactModel.updateOne({ jid }, { jid, phone, name }, { upsert: true });
-                    }
-                }
-            }
-        }
-
-        waSocket.ev.on('contacts.upsert', async (contacts) => {
-            io.emit('sync_status', 'Syncing Contacts...');
-            await processContacts(contacts);
-            io.emit('sync_status', 'Contacts Synced!');
-            io.emit('refresh_contacts');
-        });
-
-        waSocket.ev.on('contacts.update', async (contacts) => {
-            await processContacts(contacts);
-            io.emit('refresh_contacts');
-        });
-
-        waSocket.ev.on('messaging-history.set', async ({ contacts }) => {
-            io.emit('sync_status', 'Syncing Contacts...');
-            await processContacts(contacts);
-            io.emit('sync_status', 'Contacts Synced!');
-            io.emit('refresh_contacts');
-        });
+        // Removed automatic Baileys contact sync per user request
 
         // LIVE CHAT
         waSocket.ev.on('messages.upsert', async (m) => {
@@ -207,19 +175,11 @@ async function initializeApp() {
                         let displayName = displayPhone;
                         
                         if (process.env.MONGODB_URI) {
-                            if (msg.pushName) {
-                                await ContactModel.updateOne(
-                                    { jid: senderJid },
-                                    { jid: senderJid, phone: displayPhone, name: msg.pushName },
-                                    { upsert: true }
-                                );
+                            const contact = await ContactModel.findOne({ jid: senderJid });
+                            if (contact && contact.name) {
+                                displayName = `${contact.name} (${displayPhone})`;
+                            } else if (msg.pushName) {
                                 displayName = `${msg.pushName} (${displayPhone})`;
-                                io.emit('refresh_contacts'); // Instantly update UI dropdown
-                            } else {
-                                const contact = await ContactModel.findOne({ jid: senderJid });
-                                if (contact && contact.name) {
-                                    displayName = `${contact.name} (${displayPhone})`;
-                                }
                             }
                         }
 
@@ -261,13 +221,6 @@ async function initializeApp() {
                 isConnected = true;
                 io.emit('status', 'Connected');
                 io.emit('qr', null);
-                
-                // Force UI to show syncing state on fresh connect
-                io.emit('sync_status', 'Syncing Contacts...');
-                setTimeout(() => {
-                    io.emit('sync_status', 'Contacts Synced!');
-                    io.emit('refresh_contacts');
-                }, 15000); // Fail-safe UI update
             }
         });
 
@@ -292,6 +245,27 @@ app.get('/api/contacts', checkAuth, async (req, res) => {
         res.json(contacts);
     } else {
         res.json([]);
+    }
+});
+
+app.post('/api/contacts/import', checkAuth, async (req, res) => {
+    if (!process.env.MONGODB_URI) return res.status(400).json({ error: 'MongoDB not configured' });
+    const { contacts } = req.body;
+    if (!contacts || !Array.isArray(contacts)) return res.status(400).json({ error: 'Invalid data' });
+
+    try {
+        await ContactModel.deleteMany({}); // Wipe old contacts
+        for (const c of contacts) {
+            await ContactModel.updateOne(
+                { jid: c.jid },
+                { jid: c.jid, phone: c.phone, name: c.name },
+                { upsert: true }
+            );
+        }
+        res.json({ success: true, count: contacts.length });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Import failed' });
     }
 });
 
