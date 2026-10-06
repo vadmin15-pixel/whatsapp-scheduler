@@ -359,14 +359,28 @@
                 }
 
                 const headers = rows[0].map(h => h.trim().toLowerCase());
+                
+                // Name column indices
                 let nameIdx = headers.indexOf('name');
-                if (nameIdx === -1) nameIdx = headers.indexOf('given name');
+                let firstIdx = headers.indexOf('first name');
+                if (firstIdx === -1) firstIdx = headers.indexOf('given name');
                 
+                let middleIdx = headers.indexOf('middle name');
+                if (middleIdx === -1) middleIdx = headers.indexOf('additional name');
+                
+                let lastIdx = headers.indexOf('last name');
+                if (lastIdx === -1) lastIdx = headers.indexOf('family name');
+                
+                // Phone column indices
                 const phoneIndices = [];
-                headers.forEach((h, i) => { if (h.includes('phone') && h.includes('value')) phoneIndices.push(i); });
+                headers.forEach((h, i) => { 
+                    if (h === 'phone 1 - value' || (h.includes('phone') && h.includes('value'))) {
+                        phoneIndices.push(i);
+                    } 
+                });
                 
-                if (nameIdx === -1 || phoneIndices.length === 0) {
-                    statusText.innerText = "Error: Could not find Name and Phone columns. Please ensure it is a Google Contacts CSV export.";
+                if ((nameIdx === -1 && firstIdx === -1) || phoneIndices.length === 0) {
+                    statusText.innerText = "Error: Could not find Name/First Name or Phone 1 - Value columns.";
                     statusText.className = "mt-4 text-sm font-bold text-red-500";
                     btn.disabled = false; btn.innerText = "Import CSV";
                     return;
@@ -374,8 +388,21 @@
 
                 const contacts = [];
                 for (let i = 1; i < rows.length; i++) {
-                    if (rows[i].length <= Math.max(nameIdx, ...phoneIndices)) continue;
-                    const name = rows[i][nameIdx].replace(/^"|"$/g, '').trim();
+                    let name = '';
+                    
+                    // Try to get full name first
+                    if (nameIdx !== -1 && rows[i][nameIdx]) {
+                        name = rows[i][nameIdx].replace(/^"|"$/g, '').trim();
+                    } 
+                    
+                    // If no full name, combine First Middle Last
+                    if (!name) {
+                        const first = firstIdx !== -1 && rows[i][firstIdx] ? rows[i][firstIdx].replace(/^"|"$/g, '').trim() : '';
+                        const middle = middleIdx !== -1 && rows[i][middleIdx] ? rows[i][middleIdx].replace(/^"|"$/g, '').trim() : '';
+                        const last = lastIdx !== -1 && rows[i][lastIdx] ? rows[i][lastIdx].replace(/^"|"$/g, '').trim() : '';
+                        name = [first, middle, last].filter(n => n).join(' ');
+                    }
+
                     if (!name) continue;
                     
                     let phone = '';
