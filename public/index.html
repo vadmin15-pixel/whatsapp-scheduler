@@ -7,37 +7,32 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="/socket.io/socket.io.js"></script>
     <style>
-        /* Smooth tab transitions */
         .tab-content { display: none; }
         .tab-content.active { display: block; }
     </style>
 </head>
 <body class="bg-gray-100 min-h-screen text-gray-800">
 
-    <!-- MASTER PASSWORD OVERLAY -->
     <div id="login-overlay" class="fixed inset-0 bg-gray-900 bg-opacity-95 flex justify-center items-center z-50">
         <div class="bg-white p-8 rounded-xl shadow-2xl w-96 text-center">
             <h2 class="text-2xl font-bold mb-4 text-green-600">Secure Login</h2>
-            <p class="text-sm text-gray-500 mb-6">Enter your Master Password to access your WhatsApp Cloud.</p>
             <input type="password" id="password-input" placeholder="Master Password" class="w-full rounded-md border-gray-300 border p-3 mb-4 focus:border-green-500 focus:ring-green-500 text-center">
             <button onclick="attemptLogin()" class="w-full bg-green-500 text-white font-bold py-3 px-4 rounded-md hover:bg-green-600 transition-colors">Unlock Dashboard</button>
             <p id="login-error" class="text-red-500 text-sm mt-3 hidden">Incorrect Password!</p>
         </div>
     </div>
 
-    <!-- MAIN DASHBOARD (Hidden until logged in) -->
     <div id="dashboard" class="max-w-5xl mx-auto py-10 px-4 hidden">
         <div class="flex justify-between items-end mb-8">
             <h1 class="text-4xl font-bold text-green-600">WhatsApp Cloud</h1>
             <button onclick="logout()" class="text-sm text-red-500 hover:underline">Lock Dashboard</button>
         </div>
 
-        <!-- Connection Status -->
         <div class="bg-white rounded-xl shadow-sm p-4 mb-6 flex items-center justify-between border-l-4 border-yellow-400" id="status-card">
             <div>
                 <h2 class="text-sm font-bold text-gray-500 uppercase flex items-center">
                     Status 
-                    <span id="sync-badge" class="ml-4 text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded-full hidden">Syncing Contacts...</span>
+                    <span id="sync-badge" class="ml-4 text-xs bg-blue-100 text-blue-800 px-3 py-1 rounded-full hidden">Syncing Contacts...</span>
                 </h2>
                 <div id="status-text" class="text-lg font-bold text-yellow-600">Connecting/Waiting for QR...</div>
             </div>
@@ -47,30 +42,24 @@
             </div>
         </div>
 
-        <!-- TABS NAVIGATION -->
         <div class="flex space-x-2 border-b border-gray-200 mb-6">
             <button onclick="switchTab('tab-chat')" id="btn-tab-chat" class="px-6 py-3 font-bold text-gray-500 border-b-2 border-transparent hover:text-green-600 focus:outline-none">Live Chat</button>
             <button onclick="switchTab('tab-schedule')" id="btn-tab-schedule" class="px-6 py-3 font-bold text-gray-500 border-b-2 border-transparent hover:text-green-600 focus:outline-none">Scheduler</button>
             <button onclick="switchTab('tab-birthdays')" id="btn-tab-birthdays" class="px-6 py-3 font-bold text-gray-500 border-b-2 border-transparent hover:text-purple-600 focus:outline-none">Birthdays</button>
         </div>
 
-        <!-- TAB: LIVE CHAT -->
         <div id="tab-chat" class="tab-content">
             <div class="bg-white rounded-xl shadow-md overflow-hidden flex flex-col h-[600px]">
                 <div class="bg-gray-50 p-4 border-b flex justify-between items-center">
                     <h2 class="font-bold text-gray-700">Live Incoming Messages</h2>
                     <span class="text-xs bg-green-100 text-green-800 px-2 py-1 rounded-full animate-pulse">Live</span>
                 </div>
-                
-                <!-- Chat History Window -->
                 <div id="live-chat-window" class="flex-1 p-4 overflow-y-auto bg-gray-100 space-y-4">
                     <div class="text-center text-xs text-gray-400 my-4">Waiting for incoming messages...</div>
                 </div>
-
-                <!-- Instant Send Box -->
                 <div class="bg-white p-4 border-t">
                     <form id="live-send-form" class="flex space-x-2">
-                        <input type="text" id="live-phone" list="contacts-list" placeholder="Search name or number" required class="w-1/3 rounded border-gray-300 border p-2 text-sm focus:border-green-500 focus:ring-green-500">
+                        <input type="text" id="live-phone" list="contacts-list" placeholder="Search name or type number" required class="w-1/3 rounded border-gray-300 border p-2 text-sm focus:border-green-500 focus:ring-green-500">
                         <input type="text" id="live-message" placeholder="Type a message to send instantly..." required class="flex-1 rounded border-gray-300 border p-2 text-sm focus:border-green-500 focus:ring-green-500">
                         <button type="submit" class="bg-green-500 text-white font-bold py-2 px-6 rounded hover:bg-green-600">Send</button>
                     </form>
@@ -78,7 +67,6 @@
             </div>
         </div>
 
-        <!-- TAB: SCHEDULER -->
         <div id="tab-schedule" class="tab-content">
             <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div class="bg-white rounded-xl shadow-md p-6">
@@ -86,26 +74,19 @@
                     <form id="schedule-form" class="space-y-4">
                         <div>
                             <label class="block text-sm font-medium text-gray-700">Contact or Phone Number</label>
-                            <input type="text" id="phone" list="contacts-list" placeholder="Search name or type number" required class="mt-1 block w-full rounded-md border-gray-300 border p-2">
+                            <input type="text" id="phone" list="contacts-list" required class="mt-1 block w-full rounded-md border-gray-300 border p-2">
                         </div>
                         <div class="grid grid-cols-2 gap-4">
-                            <div>
-                                <label class="block text-sm font-medium text-gray-700">Date</label>
-                                <input type="date" id="date" required class="mt-1 block w-full rounded-md border-gray-300 border p-2">
-                            </div>
-                            <div>
-                                <label class="block text-sm font-medium text-gray-700">Time</label>
-                                <input type="time" id="time" required class="mt-1 block w-full rounded-md border-gray-300 border p-2">
-                            </div>
+                            <div><label class="block text-sm font-medium text-gray-700">Date</label><input type="date" id="date" required class="mt-1 block w-full rounded-md border-gray-300 border p-2"></div>
+                            <div><label class="block text-sm font-medium text-gray-700">Time</label><input type="time" id="time" required class="mt-1 block w-full rounded-md border-gray-300 border p-2"></div>
                         </div>
                         <div>
                             <label class="block text-sm font-medium text-gray-700">Message</label>
                             <textarea id="message" rows="3" required class="mt-1 block w-full rounded-md border-gray-300 border p-2"></textarea>
                         </div>
-                        <button type="submit" class="w-full bg-blue-500 text-white font-bold py-2 px-4 rounded hover:bg-blue-600">Schedule Message</button>
+                        <button type="submit" class="w-full bg-blue-500 text-white font-bold py-2 px-4 rounded hover:bg-blue-600">Schedule</button>
                     </form>
                 </div>
-
                 <div class="bg-white rounded-xl shadow-md p-6">
                     <h2 class="text-xl font-semibold mb-4 border-b pb-2">Upcoming Messages</h2>
                     <div id="tasks-list" class="space-y-3 overflow-y-auto max-h-96"></div>
@@ -113,31 +94,19 @@
             </div>
         </div>
 
-        <!-- TAB: BIRTHDAYS -->
         <div id="tab-birthdays" class="tab-content">
             <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div class="bg-white rounded-xl shadow-md p-6 border-t-4 border-purple-500">
                     <h2 class="text-xl font-semibold mb-4 border-b pb-2 text-purple-600">🎂 Add Birthday</h2>
-                    <p class="text-sm text-gray-500 mb-4">The server will WhatsApp you a reminder 3 days before.</p>
                     <form id="birthday-form" class="space-y-4">
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700">Name</label>
-                            <input type="text" id="bday-name" required class="mt-1 block w-full rounded-md border-gray-300 border p-2">
-                        </div>
+                        <div><label class="block text-sm font-medium text-gray-700">Name</label><input type="text" id="bday-name" required class="mt-1 block w-full rounded-md border-gray-300 border p-2"></div>
                         <div class="grid grid-cols-2 gap-4">
-                            <div>
-                                <label class="block text-sm font-medium text-gray-700">Contact or Phone (Optional)</label>
-                                <input type="text" id="bday-phone" list="contacts-list" placeholder="Search name or type number" class="mt-1 block w-full rounded-md border-gray-300 border p-2">
-                            </div>
-                            <div>
-                                <label class="block text-sm font-medium text-gray-700">Date of Birth</label>
-                                <input type="date" id="bday-date" required class="mt-1 block w-full rounded-md border-gray-300 border p-2">
-                            </div>
+                            <div><label class="block text-sm font-medium text-gray-700">Phone</label><input type="text" id="bday-phone" list="contacts-list" class="mt-1 block w-full rounded-md border-gray-300 border p-2"></div>
+                            <div><label class="block text-sm font-medium text-gray-700">Date of Birth</label><input type="date" id="bday-date" required class="mt-1 block w-full rounded-md border-gray-300 border p-2"></div>
                         </div>
-                        <button type="submit" class="w-full bg-purple-500 text-white font-bold py-2 px-4 rounded hover:bg-purple-600">Save Birthday</button>
+                        <button type="submit" class="w-full bg-purple-500 text-white font-bold py-2 px-4 rounded hover:bg-purple-600">Save</button>
                     </form>
                 </div>
-
                 <div class="bg-white rounded-xl shadow-md p-6">
                     <h2 class="text-xl font-semibold mb-4 border-b pb-2 text-purple-600">Saved Birthdays</h2>
                     <div id="birthdays-list" class="space-y-3 overflow-y-auto max-h-96"></div>
@@ -147,67 +116,38 @@
 
     </div>
 
-    <!-- Datalist for autocomplete -->
     <datalist id="contacts-list"></datalist>
 
     <script>
-        // --- AUTHENTICATION LOGIC ---
         let masterPassword = localStorage.getItem('wa_password') || '';
         let socket = null;
 
         async function attemptLogin() {
             const input = document.getElementById('password-input').value;
             try {
-                const res = await fetch('/api/verify-password', {
-                    method: 'POST',
-                    headers: { 'x-password': input }
-                });
-                
+                const res = await fetch('/api/verify-password', { method: 'POST', headers: { 'x-password': input } });
                 if (res.ok) {
                     masterPassword = input;
                     localStorage.setItem('wa_password', masterPassword);
                     document.getElementById('login-overlay').classList.add('hidden');
                     document.getElementById('dashboard').classList.remove('hidden');
-                    
-                    // Initialize the dashboard
                     initApp();
-                } else {
-                    document.getElementById('login-error').classList.remove('hidden');
-                }
-            } catch (err) {
-                alert("Server error. Is the backend running?");
-            }
+                } else { document.getElementById('login-error').classList.remove('hidden'); }
+            } catch (err) { alert("Server error."); }
         }
 
-        function logout() {
-            localStorage.removeItem('wa_password');
-            location.reload();
-        }
+        function logout() { localStorage.removeItem('wa_password'); location.reload(); }
 
-        // Auto-login check on page load
-        if (masterPassword) {
-            attemptLogin().then(() => {
-                document.getElementById('password-input').value = masterPassword;
-            });
-        }
+        if (masterPassword) attemptLogin().then(() => { document.getElementById('password-input').value = masterPassword; });
 
-        // --- APP INITIALIZATION ---
         function initApp() {
-            // Setup Socket.IO with password
-            socket = io({
-                auth: { password: masterPassword }
-            });
+            socket = io({ auth: { password: masterPassword } });
+            socket.on('connect_error', (err) => { if (err.message === 'Unauthorized') logout(); });
 
-            socket.on('connect_error', (err) => {
-                if (err.message === 'Unauthorized') logout();
-            });
-
-            // Status and QR
             socket.on('status', (status) => {
                 const card = document.getElementById('status-card');
                 const text = document.getElementById('status-text');
                 text.innerText = status;
-                
                 if (status === 'Connected') {
                     card.className = 'bg-white rounded-xl shadow-sm p-4 mb-6 flex items-center justify-between border-l-4 border-green-500';
                     text.className = 'text-lg font-bold text-green-600';
@@ -222,9 +162,7 @@
                 if (qrDataURL) {
                     document.getElementById('qr-image').src = qrDataURL;
                     qrContainer.classList.remove('hidden');
-                } else {
-                    qrContainer.classList.add('hidden');
-                }
+                } else { qrContainer.classList.add('hidden'); }
             });
 
             socket.on('sync_status', (text) => {
@@ -232,78 +170,48 @@
                 if (badge) {
                     badge.innerText = text;
                     badge.classList.remove('hidden');
-                    if (text.includes('Synced')) {
-                        badge.className = 'ml-4 text-xs bg-green-100 text-green-800 px-2 py-1 rounded-full inline-block';
-                    } else {
-                        badge.className = 'ml-4 text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded-full animate-pulse inline-block';
-                    }
+                    if (text.includes('Synced')) badge.className = 'ml-4 text-xs font-bold bg-green-200 text-green-900 px-3 py-1 rounded-full inline-block';
+                    else badge.className = 'ml-4 text-xs font-bold bg-blue-200 text-blue-900 px-3 py-1 rounded-full animate-pulse inline-block';
                 }
             });
 
-            socket.on('refresh_contacts', () => {
-                fetchContacts();
-            });
+            socket.on('refresh_contacts', fetchContacts);
 
-            // Live Chat Incoming
             socket.on('live_message_received', (data) => {
                 const window = document.getElementById('live-chat-window');
                 const time = new Date(data.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
-                
-                // Remove the "Waiting..." text if it exists
-                if (window.innerHTML.includes('Waiting for incoming messages...')) {
-                    window.innerHTML = '';
-                }
-
+                if (window.innerHTML.includes('Waiting for incoming messages...')) window.innerHTML = '';
                 window.innerHTML += `
                     <div class="flex flex-col items-start mb-4">
                         <span class="text-xs text-gray-500 mb-1 ml-1">${data.sender} • ${time}</span>
-                        <div class="bg-white p-3 rounded-2xl rounded-tl-none shadow-sm border border-gray-100 max-w-[80%]">
-                            ${data.text}
-                        </div>
-                    </div>
-                `;
-                window.scrollTop = window.scrollHeight; // Auto-scroll
+                        <div class="bg-white p-3 rounded-2xl rounded-tl-none shadow-sm border border-gray-100 max-w-[80%]">${data.text}</div>
+                    </div>`;
+                window.scrollTop = window.scrollHeight;
             });
 
-            // Load Data
             fetchTasks();
             fetchBirthdays();
             fetchContacts();
-            switchTab('tab-chat'); // Open Live Chat by default
+            switchTab('tab-chat');
         }
 
-        // --- TAB NAVIGATION ---
         function switchTab(tabId) {
             document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
             document.getElementById(tabId).classList.add('active');
-
-            // Update button styles
-            document.querySelectorAll('button[id^="btn-tab-"]').forEach(btn => {
-                btn.classList.remove('border-green-500', 'border-purple-500', 'text-green-600', 'text-purple-600');
-            });
-
+            document.querySelectorAll('button[id^="btn-tab-"]').forEach(btn => btn.classList.remove('border-green-500', 'border-purple-500', 'text-green-600', 'text-purple-600'));
             const activeBtn = document.getElementById('btn-' + tabId);
-            if (tabId === 'tab-birthdays') {
-                activeBtn.classList.add('border-purple-500', 'text-purple-600');
-            } else {
-                activeBtn.classList.add('border-green-500', 'text-green-600');
-            }
+            if (tabId === 'tab-birthdays') activeBtn.classList.add('border-purple-500', 'text-purple-600');
+            else activeBtn.classList.add('border-green-500', 'text-green-600');
         }
 
-        // --- HELPER FUNCTION FOR API CALLS ---
         async function apiCall(endpoint, method = 'GET', body = null) {
-            const options = {
-                method,
-                headers: { 'x-password': masterPassword, 'Content-Type': 'application/json' }
-            };
+            const options = { method, headers: { 'x-password': masterPassword, 'Content-Type': 'application/json' } };
             if (body) options.body = JSON.stringify(body);
-            
             const res = await fetch(endpoint, options);
             if (res.status === 401) logout();
             return res;
         }
 
-        // --- FETCH CONTACTS FOR AUTOCOMPLETE ---
         async function fetchContacts() {
             const res = await apiCall('/api/contacts');
             if(!res.ok) return;
@@ -312,9 +220,8 @@
             let datalist = document.getElementById('contacts-list');
             datalist.innerHTML = '';
             
-            // Remove duplicates by JID
             const unique = {};
-            contacts.filter(c => c.name && c.jid).forEach(c => unique[c.jid] = c);
+            contacts.filter(c => c.name && c.jid && c.phone && c.phone !== "Hidden").forEach(c => unique[c.jid] = c);
             const validContacts = Object.values(unique).sort((a, b) => a.name.localeCompare(b.name));
             
             validContacts.forEach(c => {
@@ -322,121 +229,75 @@
             });
         }
 
-        // --- LIVE CHAT SEND ---
         document.getElementById('live-send-form').addEventListener('submit', async (e) => {
             e.preventDefault();
             const phone = document.getElementById('live-phone').value;
             const message = document.getElementById('live-message').value;
             const btn = e.target.querySelector('button');
-            
-            btn.innerText = '...';
-            btn.disabled = true;
-
+            btn.innerText = '...'; btn.disabled = true;
             const res = await apiCall('/api/send-live', 'POST', { phone, message });
-            
             if (res.ok) {
                 const window = document.getElementById('live-chat-window');
                 const time = new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
-                
-                if (window.innerHTML.includes('Waiting for incoming messages...')) {
-                    window.innerHTML = '';
-                }
-
+                if (window.innerHTML.includes('Waiting for incoming messages...')) window.innerHTML = '';
                 window.innerHTML += `
                     <div class="flex flex-col items-end mb-4">
                         <span class="text-xs text-gray-500 mb-1 mr-1">You to ${phone.split('|')[0]} • ${time}</span>
-                        <div class="bg-green-100 p-3 rounded-2xl rounded-tr-none shadow-sm border border-green-200 max-w-[80%]">
-                            ${message}
-                        </div>
-                    </div>
-                `;
+                        <div class="bg-green-100 p-3 rounded-2xl rounded-tr-none shadow-sm border border-green-200 max-w-[80%]">${message}</div>
+                    </div>`;
                 window.scrollTop = window.scrollHeight;
                 document.getElementById('live-message').value = '';
-            } else {
-                alert('Failed to send. Is WhatsApp connected?');
-            }
-            
-            btn.innerText = 'Send';
-            btn.disabled = false;
+            } else { alert('Failed to send. Is WhatsApp connected?'); }
+            btn.innerText = 'Send'; btn.disabled = false;
         });
 
-        // --- SCHEDULER LOGIC ---
         async function fetchTasks() {
             const res = await apiCall('/api/tasks');
             if(!res.ok) return;
             const tasks = await res.json();
             const container = document.getElementById('tasks-list');
             container.innerHTML = tasks.length ? '' : '<p class="text-gray-500 italic">No scheduled messages.</p>';
-            
             tasks.sort((a, b) => new Date(a.datetime) - new Date(b.datetime)).forEach(task => {
                 const isSent = task.status === 'sent';
                 container.innerHTML += `
                     <div class="p-3 rounded border flex justify-between ${isSent ? 'bg-gray-50' : 'bg-blue-50'}">
-                        <div>
-                            <p class="font-bold text-sm ${isSent ? 'text-gray-500' : 'text-blue-800'}">${task.phone.split('|')[0]}</p>
-                            <p class="text-xs text-gray-500">${new Date(task.datetime).toLocaleString()}</p>
-                            <p class="text-sm mt-1">"${task.message}"</p>
-                        </div>
-                        <div class="flex flex-col items-end">
-                            <span class="text-xs font-bold uppercase ${isSent ? 'text-green-500' : 'text-blue-500'}">${task.status}</span>
-                            <button onclick="deleteTask('${task.id}')" class="mt-2 text-xs text-red-500 hover:text-red-700">Delete</button>
-                        </div>
-                    </div>
-                `;
+                        <div><p class="font-bold text-sm ${isSent ? 'text-gray-500' : 'text-blue-800'}">${task.phone.split('|')[0]}</p>
+                        <p class="text-xs text-gray-500">${new Date(task.datetime).toLocaleString()}</p>
+                        <p class="text-sm mt-1">"${task.message}"</p></div>
+                        <div class="flex flex-col items-end"><span class="text-xs font-bold uppercase ${isSent ? 'text-green-500' : 'text-blue-500'}">${task.status}</span>
+                        <button onclick="deleteTask('${task.id}')" class="mt-2 text-xs text-red-500 hover:text-red-700">Delete</button></div>
+                    </div>`;
             });
         }
-
         document.getElementById('schedule-form').addEventListener('submit', async (e) => {
             e.preventDefault();
-            const dt = new Date(`${document.getElementById('date').value}T${document.getElementById('time').value}`).toISOString();
-            const payload = {
-                phone: document.getElementById('phone').value,
-                datetime: dt,
-                message: document.getElementById('message').value
-            };
+            const payload = { phone: document.getElementById('phone').value, datetime: new Date(`${document.getElementById('date').value}T${document.getElementById('time').value}`).toISOString(), message: document.getElementById('message').value };
             await apiCall('/api/schedule', 'POST', payload);
-            document.getElementById('schedule-form').reset();
-            fetchTasks();
+            document.getElementById('schedule-form').reset(); fetchTasks();
         });
+        async function deleteTask(id) { if(confirm('Delete?')) { await apiCall(`/api/tasks/${id}`, 'DELETE'); fetchTasks(); } }
 
-        async function deleteTask(id) {
-            if(confirm('Delete?')) { await apiCall(`/api/tasks/${id}`, 'DELETE'); fetchTasks(); }
-        }
-
-        // --- BIRTHDAY LOGIC ---
         async function fetchBirthdays() {
             const res = await apiCall('/api/birthdays');
             if(!res.ok) return;
             const bdays = await res.json();
             const container = document.getElementById('birthdays-list');
             container.innerHTML = bdays.length ? '' : '<p class="text-gray-500 italic">No saved birthdays.</p>';
-            
             const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
             bdays.sort((a, b) => a.month === b.month ? a.day - b.day : a.month - b.month).forEach(b => {
                 container.innerHTML += `
                     <div class="p-3 rounded border bg-purple-50 border-purple-200 flex justify-between items-center">
                         <div><p class="font-bold text-sm text-purple-800">${b.name} 🎂</p><p class="text-xs text-gray-600">${months[b.month - 1]} ${b.day}</p></div>
                         <button onclick="deleteBirthday('${b.id}')" class="text-xs text-red-500 hover:text-red-700">Remove</button>
-                    </div>
-                `;
+                    </div>`;
             });
         }
-
         document.getElementById('birthday-form').addEventListener('submit', async (e) => {
             e.preventDefault();
-            const payload = {
-                name: document.getElementById('bday-name').value,
-                phone: document.getElementById('bday-phone').value,
-                date: document.getElementById('bday-date').value
-            };
-            await apiCall('/api/birthdays', 'POST', payload);
-            document.getElementById('birthday-form').reset();
-            fetchBirthdays();
+            await apiCall('/api/birthdays', 'POST', { name: document.getElementById('bday-name').value, phone: document.getElementById('bday-phone').value, date: document.getElementById('bday-date').value });
+            document.getElementById('birthday-form').reset(); fetchBirthdays();
         });
-
-        async function deleteBirthday(id) {
-            if(confirm('Remove?')) { await apiCall(`/api/birthdays/${id}`, 'DELETE'); fetchBirthdays(); }
-        }
+        async function deleteBirthday(id) { if(confirm('Remove?')) { await apiCall(`/api/birthdays/${id}`, 'DELETE'); fetchBirthdays(); } }
     </script>
 </body>
 </html>
