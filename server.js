@@ -77,7 +77,8 @@ if (process.env.MONGODB_URI) {
 
     ContactModel = mongoose.model('Contact', new mongoose.Schema({
         phone: String,
-        name: String
+        name: String,
+        jid: String
     }));
 }
 
@@ -175,30 +176,36 @@ async function initializeApp() {
             if (m.type === 'notify') {
                 for (const msg of m.messages) {
                     if (!msg.key.fromMe) {
-                        const senderNumber = msg.key.remoteJid.split('@')[0];
-                        const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text;
+                        const remoteJid = msg.key.remoteJid;
+                        const isGroup = remoteJid.endsWith('@g.us');
+                        const senderJid = isGroup ? msg.key.participant : remoteJid;
                         
-                        // Automatically learn and save new contacts when they message you
-                        if (process.env.MONGODB_URI && msg.pushName) {
-                            await ContactModel.updateOne(
-                                { phone: senderNumber },
-                                { phone: senderNumber, name: msg.pushName },
-                                { upsert: true }
-                            );
-                        }
+                        if (!senderJid) continue;
+
+                        let displayPhone = senderJid;
+                        if (senderJid.includes('@s.whatsapp.net')) displayPhone = senderJid.split('@')[0];
+                        else if (senderJid.includes('@lid')) displayPhone = "Hidden";
+
+                        let displayName = displayPhone;
                         
-                        if (text) {
-                            let displayName = senderNumber;
-                            if (process.env.MONGODB_URI) {
-                                const contact = await ContactModel.findOne({ phone: senderNumber });
+                        if (process.env.MONGODB_URI) {
+                            if (msg.pushName) {
+                                await ContactModel.updateOne(
+                                    { jid: senderJid },
+                                    { jid: senderJid, phone: displayPhone, name: msg.pushName },
+                                    { upsert: true }
+                                );
+                                displayName = `${msg.pushName} (${displayPhone})`;
+                            } else {
+                                const contact = await ContactModel.findOne({ jid: senderJid });
                                 if (contact && contact.name) {
-                                    displayName = `${contact.name} (${senderNumber})`;
-                                } else if (msg.pushName) {
-                                    displayName = `${msg.pushName} (${senderNumber})`;
+                                    displayName = `${contact.name} (${displayPhone})`;
                                 }
                             }
+                        }
 
-                            console.log(`[LIVE CHAT] Received message from ${displayName}`);
+                        const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text;
+                        if (text) {
                             io.emit('live_message_received', {
                                 sender: displayName,
                                 text: text,
@@ -210,44 +217,38 @@ async function initializeApp() {
             }
         });
 
-        // CONTACT SYNC: Listen for contact updates from WhatsApp
-        waSocket.ev.on('contacts.upsert', async (contacts) => {
-            console.log(`[SYNC] Catching ${contacts.length} contacts from upsert...`);
-            if (process.env.MONGODB_URI) {
-                for (const contact of contacts) {
-                    const name = contact.name || contact.notify || contact.verifiedName;
-                    if (name) {
-                        const phone = contact.id.split('@')[0];
-                        await ContactModel.updateOne({ phone }, { phone, name }, { upsert: true });
-                    }
+        async function processContacts(contactsArray) {
+            if (!process.env.MONGODB_URI || !contactsArray) return;
+            for (const contact of contactsArray) {
+                const name = contact.name || contact.notify || contact.verifiedName;
+                if (name) {
+                    const jid = contact.id;
+                    let phone = jid;
+                    if (jid.includes('@s.whatsapp.net')) phone = jid.split('@')[0];
+                    else if (jid.includes('@lid')) phone = "Hidden";
+                    
+                    await ContactModel.updateOne({ jid }, { jid, phone, name }, { upsert: true });
                 }
             }
+        }
+
+        waSocket.ev.on('contacts.upsert', async (contacts) => {
+            io.emit('sync_status', 'Syncing Contacts...');
+            await processContacts(contacts);
+            io.emit('sync_status', 'Contacts Synced!');
+            io.emit('refresh_contacts');
         });
 
         waSocket.ev.on('contacts.update', async (contacts) => {
-            console.log(`[SYNC] Catching ${contacts.length} contacts from update...`);
-            if (process.env.MONGODB_URI) {
-                for (const contact of contacts) {
-                    const name = contact.name || contact.notify || contact.verifiedName;
-                    if (name) {
-                        const phone = contact.id.split('@')[0];
-                        await ContactModel.updateOne({ phone }, { phone, name }, { upsert: true });
-                    }
-                }
-            }
+            await processContacts(contacts);
+            io.emit('refresh_contacts');
         });
 
         waSocket.ev.on('messaging-history.set', async ({ contacts }) => {
-            console.log(`[SYNC] Catching ${contacts.length} contacts from history set...`);
-            if (process.env.MONGODB_URI) {
-                for (const contact of contacts) {
-                    const name = contact.name || contact.notify || contact.verifiedName;
-                    if (name) {
-                        const phone = contact.id.split('@')[0];
-                        await ContactModel.updateOne({ phone }, { phone, name }, { upsert: true });
-                    }
-                }
-            }
+            io.emit('sync_status', 'Syncing Contacts...');
+            await processContacts(contacts);
+            io.emit('sync_status', 'Contacts Synced!');
+            io.emit('refresh_contacts');
         });
 
         waSocket.ev.on('connection.update', async (update) => {
@@ -323,9 +324,17 @@ app.post('/api/send-live', checkAuth, async (req, res) => {
     const { phone, message } = req.body;
     if (!phone || !message) return res.status(400).json({ error: 'Missing fields' });
 
-    const cleanPhone = phone.replace(/[^0-9]/g, '');
+    let targetJid = phone;
+    const jidMatch = phone.match(/JID:([^|]+)/);
+    if (jidMatch) {
+        targetJid = jidMatch[1].trim();
+    } else {
+        const cleanPhone = phone.replace(/[^0-9]/g, '');
+        targetJid = `${cleanPhone}@s.whatsapp.net`;
+    }
+
     try {
-        await waSocket.sendMessage(`${cleanPhone}@s.whatsapp.net`, { text: message });
+        await waSocket.sendMessage(targetJid, { text: message });
         res.json({ success: true });
     } catch (err) {
         console.error('[ERROR] Live Send Failed:', err);
@@ -339,15 +348,13 @@ app.post('/api/schedule', checkAuth, async (req, res) => {
     const { phone, message, datetime } = req.body;
     if (!phone || !message || !datetime) return res.status(400).json({ error: 'Missing fields' });
 
-    const cleanPhone = phone.replace(/[^0-9]/g, '');
-
     if (process.env.MONGODB_URI) {
-        const newTask = new TaskModel({ phone: cleanPhone, message, datetime });
+        const newTask = new TaskModel({ phone, message, datetime });
         await newTask.save();
         res.json({ success: true, task: newTask });
     } else {
         const tasks = JSON.parse(fs.readFileSync(TASKS_FILE));
-        const newTask = { id: Date.now().toString(), phone: cleanPhone, message, datetime, status: 'pending' };
+        const newTask = { id: Date.now().toString(), phone, message, datetime, status: 'pending' };
         tasks.push(newTask);
         fs.writeFileSync(TASKS_FILE, JSON.stringify(tasks, null, 2));
         res.json({ success: true, task: newTask });
@@ -382,15 +389,14 @@ app.post('/api/birthdays', checkAuth, async (req, res) => {
     const dateObj = new Date(date);
     const month = dateObj.getMonth() + 1; // 1-12
     const day = dateObj.getDate(); // 1-31
-    const cleanPhone = phone ? phone.replace(/[^0-9]/g, '') : '';
 
     if (process.env.MONGODB_URI) {
-        const newBday = new BirthdayModel({ name, phone: cleanPhone, month, day });
+        const newBday = new BirthdayModel({ name, phone, month, day });
         await newBday.save();
         res.json({ success: true, birthday: newBday });
     } else {
         const bdays = JSON.parse(fs.readFileSync(BIRTHDAYS_FILE));
-        const newBday = { id: Date.now().toString(), name, phone: cleanPhone, month, day };
+        const newBday = { id: Date.now().toString(), name, phone, month, day };
         bdays.push(newBday);
         fs.writeFileSync(BIRTHDAYS_FILE, JSON.stringify(bdays, null, 2));
         res.json({ success: true, birthday: newBday });
@@ -430,8 +436,17 @@ cron.schedule('* * * * *', async () => {
         for (const task of tasks) {
             if (now >= new Date(task.datetime)) {
                 try {
-                    await waSocket.sendMessage(`${task.phone}@s.whatsapp.net`, { text: task.message });
-                    console.log(`[SUCCESS] Sent message to ${task.phone}`);
+                    let targetJid = task.phone;
+                    const jidMatch = task.phone.match(/JID:([^|]+)/);
+                    if (jidMatch) {
+                        targetJid = jidMatch[1].trim();
+                    } else {
+                        const cleanPhone = task.phone.replace(/[^0-9]/g, '');
+                        targetJid = `${cleanPhone}@s.whatsapp.net`;
+                    }
+
+                    await waSocket.sendMessage(targetJid, { text: task.message });
+                    console.log(`[SUCCESS] Sent message to ${targetJid}`);
                     task.status = 'sent';
                 } catch (err) {
                     console.error(`[ERROR] Failed to send:`, err);
@@ -446,8 +461,16 @@ cron.schedule('* * * * *', async () => {
         for (let i = 0; i < tasks.length; i++) {
             if (tasks[i].status === 'pending' && now >= new Date(tasks[i].datetime)) {
                 try {
-                    await waSocket.sendMessage(`${tasks[i].phone}@s.whatsapp.net`, { text: tasks[i].message });
-                    console.log(`[SUCCESS] Sent message to ${tasks[i].phone}`);
+                    let targetJid = tasks[i].phone;
+                    const jidMatch = tasks[i].phone.match(/JID:([^|]+)/);
+                    if (jidMatch) {
+                        targetJid = jidMatch[1].trim();
+                    } else {
+                        const cleanPhone = tasks[i].phone.replace(/[^0-9]/g, '');
+                        targetJid = `${cleanPhone}@s.whatsapp.net`;
+                    }
+                    await waSocket.sendMessage(targetJid, { text: tasks[i].message });
+                    console.log(`[SUCCESS] Sent message to ${targetJid}`);
                     tasks[i].status = 'sent';
                 } catch (err) {
                     console.error(`[ERROR] Failed to send:`, err);

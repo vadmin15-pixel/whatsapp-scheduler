@@ -35,7 +35,10 @@
         <!-- Connection Status -->
         <div class="bg-white rounded-xl shadow-sm p-4 mb-6 flex items-center justify-between border-l-4 border-yellow-400" id="status-card">
             <div>
-                <h2 class="text-sm font-bold text-gray-500 uppercase">Status</h2>
+                <h2 class="text-sm font-bold text-gray-500 uppercase flex items-center">
+                    Status 
+                    <span id="sync-badge" class="ml-4 text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded-full hidden">Syncing Contacts...</span>
+                </h2>
                 <div id="status-text" class="text-lg font-bold text-yellow-600">Connecting/Waiting for QR...</div>
             </div>
             <div id="qr-container" class="hidden flex flex-col items-end">
@@ -290,11 +293,32 @@
             }
             datalist.innerHTML = '';
             
-            const validContacts = contacts.filter(c => c.name && c.phone).sort((a, b) => a.name.localeCompare(b.name));
+            // Remove duplicates by JID
+            const unique = {};
+            contacts.filter(c => c.name && c.jid).forEach(c => unique[c.jid] = c);
+            const validContacts = Object.values(unique).sort((a, b) => a.name.localeCompare(b.name));
+            
             validContacts.forEach(c => {
-                datalist.innerHTML += `<option value="${c.name} - ${c.phone}">`;
+                datalist.innerHTML += `<option value="${c.name} (${c.phone}) | JID:${c.jid}">`;
             });
         }
+
+        socket.on('sync_status', (text) => {
+            const badge = document.getElementById('sync-badge');
+            if (badge) {
+                badge.innerText = text;
+                badge.classList.remove('hidden');
+                if (text.includes('Synced')) {
+                    badge.className = 'ml-4 text-xs bg-green-100 text-green-800 px-2 py-1 rounded-full inline-block';
+                } else {
+                    badge.className = 'ml-4 text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded-full animate-pulse inline-block';
+                }
+            }
+        });
+
+        socket.on('refresh_contacts', () => {
+            fetchContacts();
+        });
 
         // --- LIVE CHAT SEND ---
         document.getElementById('live-send-form').addEventListener('submit', async (e) => {
