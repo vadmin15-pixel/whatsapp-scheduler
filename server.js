@@ -9,7 +9,7 @@ const path = require('path');
 const pino = require('pino');
 const mongoose = require('mongoose');
 
-const { makeWASocket, fetchLatestBaileysVersion, DisconnectReason, initAuthCreds, BufferJSON, useMultiFileAuthState, makeInMemoryStore } = require('@whiskeysockets/baileys');
+const { makeWASocket, fetchLatestBaileysVersion, DisconnectReason, initAuthCreds, BufferJSON, useMultiFileAuthState } = require('@whiskeysockets/baileys');
 
 const app = express();
 const server = http.createServer(app);
@@ -48,9 +48,6 @@ let waSocket;
 
 const TASKS_FILE = path.join(__dirname, 'tasks.json');
 const BIRTHDAYS_FILE = path.join(__dirname, 'birthdays.json');
-
-// Initialize the in-memory store to aggressively capture all iOS/Android contacts
-const store = makeInMemoryStore({ logger: pino({ level: 'silent' }) });
 
 // Define Models at top level so they are immediately available
 let TaskModel;
@@ -172,9 +169,6 @@ async function initializeApp() {
             logger: pino({ level: 'silent' }),
             browser: ['WhatsApp Scheduler', 'Chrome', '1.0.0']
         });
-
-        // Bind the store to aggressively catch contacts
-        store.bind(waSocket.ev);
 
         // LIVE CHAT: Listen for incoming messages
         waSocket.ev.on('messages.upsert', async (m) => {
