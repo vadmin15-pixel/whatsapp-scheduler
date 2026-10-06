@@ -178,13 +178,23 @@ async function initializeApp() {
                         const senderNumber = msg.key.remoteJid.split('@')[0];
                         const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text;
                         
+                        // Automatically learn and save new contacts when they message you
+                        if (process.env.MONGODB_URI && msg.pushName) {
+                            await ContactModel.updateOne(
+                                { phone: senderNumber },
+                                { phone: senderNumber, name: msg.pushName },
+                                { upsert: true }
+                            );
+                        }
+                        
                         if (text) {
                             let displayName = senderNumber;
-                            // Try to look up the name in the database
                             if (process.env.MONGODB_URI) {
                                 const contact = await ContactModel.findOne({ phone: senderNumber });
                                 if (contact && contact.name) {
                                     displayName = `${contact.name} (${senderNumber})`;
+                                } else if (msg.pushName) {
+                                    displayName = `${msg.pushName} (${senderNumber})`;
                                 }
                             }
 
@@ -202,32 +212,39 @@ async function initializeApp() {
 
         // CONTACT SYNC: Listen for contact updates from WhatsApp
         waSocket.ev.on('contacts.upsert', async (contacts) => {
+            console.log(`[SYNC] Catching ${contacts.length} contacts from upsert...`);
             if (process.env.MONGODB_URI) {
                 for (const contact of contacts) {
                     const name = contact.name || contact.notify || contact.verifiedName;
                     if (name) {
                         const phone = contact.id.split('@')[0];
-                        await ContactModel.updateOne(
-                            { phone },
-                            { phone, name },
-                            { upsert: true }
-                        );
+                        await ContactModel.updateOne({ phone }, { phone, name }, { upsert: true });
+                    }
+                }
+            }
+        });
+
+        waSocket.ev.on('contacts.update', async (contacts) => {
+            console.log(`[SYNC] Catching ${contacts.length} contacts from update...`);
+            if (process.env.MONGODB_URI) {
+                for (const contact of contacts) {
+                    const name = contact.name || contact.notify || contact.verifiedName;
+                    if (name) {
+                        const phone = contact.id.split('@')[0];
+                        await ContactModel.updateOne({ phone }, { phone, name }, { upsert: true });
                     }
                 }
             }
         });
 
         waSocket.ev.on('messaging-history.set', async ({ contacts }) => {
+            console.log(`[SYNC] Catching ${contacts.length} contacts from history set...`);
             if (process.env.MONGODB_URI) {
                 for (const contact of contacts) {
                     const name = contact.name || contact.notify || contact.verifiedName;
                     if (name) {
                         const phone = contact.id.split('@')[0];
-                        await ContactModel.updateOne(
-                            { phone },
-                            { phone, name },
-                            { upsert: true }
-                        );
+                        await ContactModel.updateOne({ phone }, { phone, name }, { upsert: true });
                     }
                 }
             }
