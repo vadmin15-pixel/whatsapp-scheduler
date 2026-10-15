@@ -17,11 +17,20 @@ const io = new Server(server);
 
 app.use(express.json());
 
-// Serve index.html directly from the main folder (no public folder needed)
+// Serve index.html from root directory or fallback to public folder
 app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'index.html'));
+    if (fs.existsSync(path.join(__dirname, 'index.html'))) {
+        res.sendFile(path.join(__dirname, 'index.html'));
+    } else if (fs.existsSync(path.join(__dirname, 'public', 'index.html'))) {
+        res.sendFile(path.join(__dirname, 'public', 'index.html'));
+    } else {
+        res.status(404).send('index.html not found');
+    }
 });
+app.use(express.static(__dirname));
+app.use(express.static(path.join(__dirname, 'public')));
 
+// --- SECURITY MIDDLEWARE ---
 function checkAuth(req, res, next) {
     const correctPassword = process.env.MASTER_PASSWORD || 'admin';
     const providedPassword = req.headers['x-password'];
@@ -38,6 +47,7 @@ io.use((socket, next) => {
 
 let isConnected = false;
 let waSocket;
+let reconnectWhatsApp;
 
 const TASKS_FILE = path.join(__dirname, 'tasks.json');
 const BIRTHDAYS_FILE = path.join(__dirname, 'birthdays.json');
@@ -119,10 +129,6 @@ async function initializeApp() {
         await mongoose.connect(process.env.MONGODB_URI);
         console.log('✅ Connected to MongoDB!');
 
-        // Wipe old corrupt contacts to guarantee clean state
-        console.log('🧹 Wiping old contacts to ensure clean sync...');
-        await ContactModel.deleteMany({});
-
         const authState = await useMongoDBAuthState();
         state = authState.state;
         saveCreds = authState.saveCreds;
@@ -154,8 +160,6 @@ async function initializeApp() {
             logger: pino({ level: 'silent' }),
             browser: ['WhatsApp Scheduler', 'Chrome', '1.0.0']
         });
-
-        // Removed automatic Baileys contact sync per user request
 
         // LIVE CHAT
         waSocket.ev.on('messages.upsert', async (m) => {
@@ -197,14 +201,14 @@ async function initializeApp() {
         });
 
         waSocket.ev.on('connection.update', async (update) => {
-            const { connection, lastDisconnect, qr, isNewLogin } = update;
+            const { connection, lastDisconnect, qr } = update;
 
             if (qr) {
                 io.emit('qr', await QRCode.toDataURL(qr));
             }
 
             if (connection === 'close') {
-                const shouldReconnect = lastDisconnect.error?.output?.statusCode !== DisconnectReason.loggedOut;
+                const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
                 isConnected = false;
                 io.emit('status', 'Disconnected');
                 
@@ -213,7 +217,6 @@ async function initializeApp() {
                 } else {
                     if (process.env.MONGODB_URI) {
                         await AuthModel.deleteMany({});
-                        await ContactModel.deleteMany({});
                     }
                     setTimeout(() => connectToWhatsApp(true), 2000);
                 }
@@ -227,6 +230,7 @@ async function initializeApp() {
         waSocket.ev.on('creds.update', saveCreds);
     }
 
+    reconnectWhatsApp = connectToWhatsApp;
     connectToWhatsApp();
 }
 
@@ -236,8 +240,42 @@ io.on('connection', (socket) => {
     socket.emit('status', isConnected ? 'Connected' : 'Connecting/Waiting for QR');
 });
 
+// --- API ENDPOINTS ---
 app.get('/api/ping', (req, res) => res.send('pong'));
 app.post('/api/verify-password', checkAuth, (req, res) => res.json({ success: true }));
+
+// WhatsApp Logout / Disconnect endpoint
+app.post('/api/logout', checkAuth, async (req, res) => {
+    try {
+        console.log('[LOGOUT] Unlinking WhatsApp device requested...');
+        if (waSocket) {
+            await waSocket.logout().catch(e => console.log('waSocket.logout caught:', e.message));
+        }
+        if (process.env.MONGODB_URI) {
+            await AuthModel.deleteMany({});
+        }
+        isConnected = false;
+        io.emit('status', 'Disconnected');
+        io.emit('qr', null);
+        
+        setTimeout(() => {
+            if (reconnectWhatsApp) reconnectWhatsApp(true);
+        }, 1500);
+        
+        res.json({ success: true });
+    } catch (err) {
+        console.error('[LOGOUT] Error during logout:', err);
+        if (process.env.MONGODB_URI) {
+            await AuthModel.deleteMany({});
+        }
+        isConnected = false;
+        io.emit('status', 'Disconnected');
+        setTimeout(() => {
+            if (reconnectWhatsApp) reconnectWhatsApp(true);
+        }, 1500);
+        res.json({ success: true });
+    }
+});
 
 app.get('/api/contacts', checkAuth, async (req, res) => {
     if (process.env.MONGODB_URI) {
@@ -254,7 +292,7 @@ app.post('/api/contacts/import', checkAuth, async (req, res) => {
     if (!contacts || !Array.isArray(contacts)) return res.status(400).json({ error: 'Invalid data' });
 
     try {
-        await ContactModel.deleteMany({}); // Wipe old contacts
+        await ContactModel.deleteMany({}); // Clean wipe before import
         for (const c of contacts) {
             await ContactModel.updateOne(
                 { jid: c.jid },
@@ -296,6 +334,12 @@ app.post('/api/schedule', checkAuth, async (req, res) => {
         const newTask = new TaskModel({ phone, message, datetime });
         await newTask.save();
         res.json({ success: true });
+    } else {
+        const tasks = JSON.parse(fs.readFileSync(TASKS_FILE));
+        const newTask = { id: Date.now().toString(), phone, message, datetime, status: 'pending' };
+        tasks.push(newTask);
+        fs.writeFileSync(TASKS_FILE, JSON.stringify(tasks, null, 2));
+        res.json({ success: true, task: newTask });
     }
 });
 
@@ -303,11 +347,18 @@ app.get('/api/tasks', checkAuth, async (req, res) => {
     if (process.env.MONGODB_URI) {
         const tasks = await TaskModel.find();
         res.json(tasks.map(t => ({ id: t._id, phone: t.phone, message: t.message, datetime: t.datetime, status: t.status })));
+    } else {
+        res.json(JSON.parse(fs.readFileSync(TASKS_FILE)));
     }
 });
 
 app.delete('/api/tasks/:id', checkAuth, async (req, res) => {
     if (process.env.MONGODB_URI) await TaskModel.findByIdAndDelete(req.params.id);
+    else {
+        let tasks = JSON.parse(fs.readFileSync(TASKS_FILE));
+        tasks = tasks.filter(t => t.id !== req.params.id);
+        fs.writeFileSync(TASKS_FILE, JSON.stringify(tasks, null, 2));
+    }
     res.json({ success: true });
 });
 
@@ -318,6 +369,12 @@ app.post('/api/birthdays', checkAuth, async (req, res) => {
         const newBday = new BirthdayModel({ name, phone, month: d.getMonth() + 1, day: d.getDate() });
         await newBday.save();
         res.json({ success: true });
+    } else {
+        const bdays = JSON.parse(fs.readFileSync(BIRTHDAYS_FILE));
+        const newBday = { id: Date.now().toString(), name, phone, month: d.getMonth() + 1, day: d.getDate() };
+        bdays.push(newBday);
+        fs.writeFileSync(BIRTHDAYS_FILE, JSON.stringify(bdays, null, 2));
+        res.json({ success: true, birthday: newBday });
     }
 });
 
@@ -325,14 +382,22 @@ app.get('/api/birthdays', checkAuth, async (req, res) => {
     if (process.env.MONGODB_URI) {
         const bdays = await BirthdayModel.find();
         res.json(bdays.map(b => ({ id: b._id, name: b.name, phone: b.phone, month: b.month, day: b.day })));
+    } else {
+        res.json(JSON.parse(fs.readFileSync(BIRTHDAYS_FILE)));
     }
 });
 
 app.delete('/api/birthdays/:id', checkAuth, async (req, res) => {
     if (process.env.MONGODB_URI) await BirthdayModel.findByIdAndDelete(req.params.id);
+    else {
+        let bdays = JSON.parse(fs.readFileSync(BIRTHDAYS_FILE));
+        bdays = bdays.filter(b => b.id !== req.params.id);
+        fs.writeFileSync(BIRTHDAYS_FILE, JSON.stringify(bdays, null, 2));
+    }
     res.json({ success: true });
 });
 
+// --- CRON WORKER ---
 let lastBirthdayCheckDate = null;
 cron.schedule('* * * * *', async () => {
     if (!isConnected || !waSocket) return;

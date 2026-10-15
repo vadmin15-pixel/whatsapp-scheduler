@@ -25,7 +25,10 @@
     <div id="dashboard" class="max-w-5xl mx-auto py-10 px-4 hidden">
         <div class="flex justify-between items-end mb-8">
             <h1 class="text-4xl font-bold text-green-600">WhatsApp Cloud</h1>
-            <button onclick="logout()" class="text-sm text-red-500 hover:underline">Lock Dashboard</button>
+            <div class="flex items-center space-x-3">
+                <button onclick="lockDashboard()" class="text-sm text-gray-600 hover:text-gray-900 font-medium px-3 py-1.5 rounded-lg border border-gray-300 hover:bg-gray-100 transition-colors">Lock Dashboard</button>
+                <button onclick="logoutWhatsApp()" class="text-sm bg-red-50 text-red-600 hover:bg-red-100 font-semibold px-3 py-1.5 rounded-lg border border-red-200 transition-colors">Logout</button>
+            </div>
         </div>
 
         <div class="bg-white rounded-xl shadow-sm p-4 mb-6 flex items-center justify-between border-l-4 border-yellow-400" id="status-card">
@@ -152,7 +155,27 @@
             } catch (err) { alert("Server error."); }
         }
 
-        function logout() { localStorage.removeItem('wa_password'); location.reload(); }
+        function lockDashboard() { 
+            localStorage.removeItem('wa_password'); 
+            location.reload(); 
+        }
+        function logout() { lockDashboard(); }
+
+        async function logoutWhatsApp() {
+            if (!confirm('Are you sure you want to log out of WhatsApp? This will disconnect your WhatsApp account and show a new QR code to link.')) {
+                return;
+            }
+            try {
+                const res = await apiCall('/api/logout', 'POST');
+                if (res.ok) {
+                    alert('Logged out from WhatsApp. A new QR code will appear shortly.');
+                } else {
+                    alert('Failed to log out from WhatsApp.');
+                }
+            } catch (err) {
+                alert('Error during logout: ' + err.message);
+            }
+        }
 
         if (masterPassword) attemptLogin().then(() => { document.getElementById('password-input').value = masterPassword; });
 
